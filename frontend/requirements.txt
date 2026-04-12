@@ -1,6 +1,6 @@
-flask
-opencv-python
-Pillow
-python-multipart
-tensorflow
-requests
+flask==3.1.3
+opencv-python==4.6.0.66
+Pillow==12.2.0
+python-multipart==0.0.5
+tensorflow==2.15.0
+requests==2.33.1
