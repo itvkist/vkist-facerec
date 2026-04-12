@@ -1,15 +1,13 @@
 """
-Test the Deep3D mask-removal pipeline on a single image.
+Test the Deep3D mask-removal pipeline.
+
+Input:  ./deep3d/masked-face.jpg
+Output: ./deep3d/unmasked-face.jpg
 
 Usage:
-    python test_deep3d.py path/to/face.jpg
-
-Output files (saved next to this script):
-    deep3d_input.jpg   — input face image
-    deep3d_output.jpg  — reconstructed face after mask removal
+    python test_deep3d.py
 """
 
-import sys
 import os
 import numpy as np
 import cv2
@@ -23,14 +21,8 @@ from deep3d.models import create_model
 from deep3d.util.visualizer import MyVisualizer
 from deep3d.util.preprocess import align_img
 
-# ── Parse our own argument before Deep3D's argparse runs ──────────────────────
-# TestOptions().parse() reads sys.argv directly, so we pop our image path first.
-
-if len(sys.argv) < 2:
-    print('Usage: python test_deep3d.py path/to/face.jpg')
-    sys.exit(1)
-
-img_path = sys.argv.pop(1)  # remove so argparse doesn't see it
+INPUT_PATH  = './deep3d/masked-face.jpg'
+OUTPUT_PATH = './deep3d/unmasked-face.jpg'
 
 # ── Setup ──────────────────────────────────────────────────────────────────────
 
@@ -97,31 +89,20 @@ def rasterize():
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
-    if not os.path.isfile(img_path):
-        print(f'File not found: {img_path}')
-        sys.exit(1)
+    if not os.path.isfile(INPUT_PATH):
+        print(f'Input not found: {INPUT_PATH}')
+        raise SystemExit(1)
 
-    # Load image
-    input_img = Image.open(img_path).convert('RGB')
-    print(f'Input image: {img_path}  size={input_img.size}')
+    input_img = Image.open(INPUT_PATH).convert('RGB')
+    print(f'Input: {INPUT_PATH}  size={input_img.size}')
 
-    # Save input for side-by-side comparison
-    input_bgr = cv2.cvtColor(np.array(input_img), cv2.COLOR_RGB2BGR)
-    cv2.imwrite('deep3d_input.jpg', input_bgr)
-    print('Saved: deep3d_input.jpg')
-
-    # Detect landmarks
     print('Detecting landmarks ...')
     lm = detect_landmark(input_img)
-    print(f'Landmarks:\n{lm}')
 
-    # Reconstruct and rasterize
     print('Running Deep3D reconstruction ...')
     reconstruct(input_img, lm)
     output_rgb = rasterize()
 
-    # Save output
     output_bgr = cv2.cvtColor(output_rgb, cv2.COLOR_RGB2BGR)
-    cv2.imwrite('deep3d_output.jpg', output_bgr)
-    print('Saved: deep3d_output.jpg')
-    print('Done.')
+    cv2.imwrite(OUTPUT_PATH, output_bgr)
+    print(f'Saved: {OUTPUT_PATH}')

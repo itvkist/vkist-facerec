@@ -1,376 +1,246 @@
+import os
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'   # suppress oneDNN numerical warnings
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'    # suppress TF C++ INFO/WARNING logs
+
 from flask import Flask, render_template, Response, jsonify
 import cv2
 import requests
 import base64
-import json                    
+import json
 import time
 import threading
+import warnings
+warnings.filterwarnings('ignore', category=UserWarning, module='tensorflow')
 
-from utils.service.TFLiteFaceAlignment import * 
-from utils.service.TFLiteFaceDetector import * 
+from utils.service.TFLiteFaceAlignment import *
+from utils.service.TFLiteFaceDetector import *
 from utils.functions import *
 
 app = Flask(__name__)
 
-path = "./"
+# ── Configuration ─────────────────────────────────────────────────────────────
 
-fd_0 = UltraLightFaceDetecion(path + "utils/service/weights/RFB-320.tflite", conf_threshold=0.98)
-fd_1 = UltraLightFaceDetecion(path + "utils/service/weights/RFB-320.tflite", conf_threshold=0.98)
-fa = CoordinateAlignmentModel(path + "utils/service/weights/coor_2d106.tflite")
+# Backend URL — change to domain name if not running locally
+BACKEND_URL = 'http://localhost:5002/'
 
-url = 'http://localhost:5002/' # Change this to the domain name if it's not running on local server (E.g: https://facerec.vkist-hub.com/)
+# Account secret key from the backend (id: abc / password: 123)
+SECRET_KEY = "5f24fd82-9f64-47a5-a0cf-55765bdafcd9"
 
-api_list = [url + 'facerec', url + 'check_pickup']
-request_times = [15, 10, 10]
-api_index = 0
-extend_pixel = 50
-crop_image_size = 100
+# Send a recognition request every N frames
+REQUEST_INTERVAL = 15
 
-# id: abc / password: 123
-secret_key = "5f24fd82-9f64-47a5-a0cf-55765bdafcd9" # Change this to the account secret key from the backend
+# Pixels to extend around detected face crop before sending to backend
+EXTEND_PIXEL = 50
+
+# Max concurrent recognition threads per stream
+MAX_QUEUE = 3
+
+# RTSP stream URLs — add as many as needed, leave empty to use webcams only
+RTSP_URLS = [
+    # 'rtsp://admin:password@192.168.1.10:554/Streaming/channels/102',
+    # 'rtsp://admin:password@192.168.1.11:554/Streaming/channels/102',
+]
+
+# ── Model initialization ───────────────────────────────────────────────────────
+
+WEIGHTS_PATH = "./utils/service/weights/"
+fa = CoordinateAlignmentModel(WEIGHTS_PATH + "coor_2d106.tflite")
+
+# ── Shared state ───────────────────────────────────────────────────────────────
 
 predict_labels = []
+predict_labels_lock = threading.Lock()
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def image_to_base64(frame):
+    """Encode a BGR numpy frame to a base64 JPEG data URI."""
+    _, encimg = cv2.imencode(".jpg", frame)
+    img_str = base64.b64encode(encimg.tobytes()).decode('utf-8')
+    return "data:image/jpeg;base64," + img_str
+
+
+def fetch_profile_image(profile_id):
+    """Fetch a profile face image from the backend and return as base64 data URI."""
+    if profile_id is None:
+        return None
+    url = BACKEND_URL + 'images/' + SECRET_KEY + '/' + profile_id
+    img = np.array(Image.open(requests.get(url, stream=True).raw))
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    return image_to_base64(img)
+
 
 def face_recognize(frame):
-    global api_index
-
-    _, encimg = cv2.imencode(".jpg", frame)
-    img_byte = encimg.tobytes()
-    img_str = base64.b64encode(img_byte).decode('utf-8')
-    new_img_str = "data:image/jpeg;base64," + img_str
+    """Send a face crop to the backend for recognition and store results."""
     headers = {'Content-type': 'application/json', 'Accept': 'text/plain', 'charset': 'utf-8'}
-
-    payload = json.dumps({"secret_key": secret_key, "img": new_img_str, 'local_register' : False})
-
-    response = requests.post(api_list[api_index], data=payload, headers=headers, timeout=100)
+    payload = json.dumps({
+        "secret_key": SECRET_KEY,
+        "img": image_to_base64(frame),
+        "local_register": False
+    })
 
     try:
-        # for id, name, picker_name, profileID, picker_profile_face_id, timestamp in zip( 
-        for id, name, profileID, timestamp in zip( 
-                                                                                        response.json()['result']['id'],
-                                                                                        response.json()['result']['identities'],
-                                                                                        # response.json()['result']['picker_profile_names'],
-                                                                                        response.json()['result']['profilefaceIDs'],
-                                                                                        # response.json()['result']['pickerProfileFaceIds'],
-                                                                                        response.json()['result']['timelines']
-                                                                                        ):
-            print('Server response', response.json()['result']['identities'])
-            if id != -1:
-                # response_time_s = time.time() - seconds
-                # print("Server's response time: " + "%.2f" % (response_time_s) + " (s)")
-                # print('picker_profile_face_id', picker_profile_face_id)
-                cur_profile_face = None
-                cur_picker_profile_face = None
+        response = requests.post(
+            BACKEND_URL + 'facerec',
+            data=payload,
+            headers=headers,
+            timeout=100
+        )
+        result = response.json()['result']
 
-                if profileID is not None:
-                    cur_url = url + 'images/' + secret_key + '/' + profileID
-                    cur_profile_face = np.array(Image.open(requests.get(cur_url, stream=True).raw))
-                    # cur_profile_face = cv2.resize(cur_profile_face, (crop_image_size, crop_image_size))
-                    cur_profile_face = cv2.cvtColor(cur_profile_face, cv2.COLOR_BGR2RGB)
+        for person_id, name, profile_id, timestamp in zip(
+            result['id'],
+            result['identities'],
+            result['profilefaceIDs'],
+            result['timelines']
+        ):
+            if person_id == -1:
+                continue
 
-                    _, encimg = cv2.imencode(".jpg", cur_profile_face)
-                    img_byte = encimg.tobytes()
-                    img_str = base64.b64encode(img_byte).decode('utf-8')
-                    cur_profile_face = "data:image/jpeg;base64," + img_str
+            face_thumb = image_to_base64(cv2.resize(frame, (100, 100)))
+            profile_face = fetch_profile_image(profile_id)
+
+            with predict_labels_lock:
+                predict_labels.append([person_id, name, face_thumb, profile_face, timestamp])
+
+    except requests.exceptions.RequestException as e:
+        print(f'Recognition request failed: {e}')
 
 
-                # if picker_profile_face_id is not None:
-                #     cur_url = url + 'images/' + secret_key + '/' + picker_profile_face_id
-                #     cur_picker_profile_face = np.array(Image.open(requests.get(cur_url, stream=True).raw))
-                #     # cur_picker_profile_face = cv2.resize(cur_picker_profile_face, (crop_image_size, crop_image_size))
-                #     cur_picker_profile_face = cv2.cvtColor(cur_picker_profile_face, cv2.COLOR_BGR2RGB)
+def open_camera(source):
+    """
+    Open a camera source. Returns (cap, flip_code) or raises RuntimeError.
+    flip_code: 1 = horizontal flip (webcam), -1 = no flip (RTSP/IP cam).
+    """
+    cap = cv2.VideoCapture(source)
+    if not cap.isOpened():
+        raise RuntimeError(f"Cannot open camera source: {source}")
+    # Flip horizontally for webcams (mirror effect), not for RTSP
+    flip_code = 1 if isinstance(source, int) else None
+    return cap, flip_code
 
-                    # _, encimg = cv2.imencode(".jpg", cur_picker_profile_face)
-                    # img_byte = encimg.tobytes()
-                    # img_str = base64.b64encode(img_byte).decode('utf-8')
-                    # cur_picker_profile_face = "data:image/jpeg;base64," + img_str
 
-                frame = cv2.resize(frame, (crop_image_size, crop_image_size))
-                _, encimg = cv2.imencode(".jpg", frame)
-                img_byte = encimg.tobytes()
-                img_str = base64.b64encode(img_byte).decode('utf-8')
-                new_img_str = "data:image/jpeg;base64," + img_str
+def detect_webcams():
+    """Try webcam indices 0 and 1, return list of available indices."""
+    available = []
+    for index in range(2):
+        cap = cv2.VideoCapture(index)
+        if cap.isOpened():
+            ret, _ = cap.read()
+            if ret:
+                available.append(index)
+        cap.release()
+    return available
 
-                # predict_labels.append([id, name, picker_name, new_img_str, cur_profile_face, cur_picker_profile_face, timestamp])
-                predict_labels.append([id, name, new_img_str, cur_profile_face, timestamp])
 
-    except requests.exceptions.RequestException:
-        print(response.text)
+def stream_frames(source):
+    """
+    Generator that yields MJPEG frames from a camera source (webcam index or RTSP URL).
+    Runs face detection every REQUEST_INTERVAL frames and spawns recognition threads.
+    Each stream gets its own face detector instance to avoid race conditions.
+    """
+    fd = UltraLightFaceDetecion(WEIGHTS_PATH + "RFB-320.tflite", conf_threshold=0.98)
 
-def get_frame_0():
-    # Open the webcam stream
-    # ip_cam = 'rtsp://admin:vkist@123@192.168.47.65:554/profile2/media.smp'
-    # ip_cam = 'rtsp://admin:Vkist@24@192.168.47.60:554/Streaming/channels/102'
-    # ip_cam = 'rtsp://admin:Vkist123@192.168.42.10:554/Streaming/channels/102'
-    # ip_cam = 'rtsp://169.254.49.47:554/1/stream1/Profile1'
-    # ip_cam = 'rtsp://192.168.47.64/profile2/media.smp'
-    # ip_cam = 'rtsp://192.168.47.64:8000/profile2/media.smp'
-    
-    # webcam_0 = cv2.VideoCapture(ip_cam)
-    webcam_0 = cv2.VideoCapture(0)
-    # if not webcam_0.isOpened():
-    #     return True
-    frame_width = int(webcam_0.get(3))
-    frame_height = int(webcam_0.get(4))
+    cap, flip_code = open_camera(source)
+    frame_width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
     prev_frame_time = 0
-    new_frame_time = 0
     queue = []
     count = 0
 
     while True:
-        count += 1
-        # Read a frame from the stream
-        ret, orig_image = webcam_0.read()
-        orig_image = cv2.flip(orig_image, 1)
+        ret, orig_image = cap.read()
+        if not ret:
+            print(f'Stream lost: {source}')
+            break
+
+        # Mirror webcam frames horizontally
+        if flip_code is not None:
+            orig_image = cv2.flip(orig_image, flip_code)
 
         final_frame = orig_image.copy()
-        scale_ratio = 1/1
-        new_height, new_width = int(frame_height * scale_ratio), int(frame_width * scale_ratio)
+        count += 1
 
-        resized_image = cv2.resize(orig_image, (new_width, new_height), interpolation = cv2.INTER_CUBIC)
+        # ── Face detection ─────────────────────────────────────────────────
+        boxes, _ = fd.inference(orig_image)
+        draw_box(final_frame, boxes, color=(125, 255, 125))
+        landmarks = fa.get_landmarks(orig_image, boxes)
 
-        temp_resized_boxes, _ = fd_0.inference(resized_image)
-        
-        temp_boxes = temp_resized_boxes * (1 / scale_ratio)
+        # ── Send crops to backend every REQUEST_INTERVAL frames ────────────
+        if (count % REQUEST_INTERVAL) == 0:
+            count = 0
+            queue = [t for t in queue if t.is_alive()]
 
-        # Draw boundary boxes around faces
-        draw_box(final_frame, temp_boxes, color=(125, 255, 125))
+            for bbox, landmark in zip(boxes, landmarks):
+                xmin, ymin, xmax, ymax = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
 
-        # Find landmarks of each face
-        temp_resized_marks = fa.get_landmarks(resized_image, temp_resized_boxes)
+                # Expand bounding box slightly for better recognition
+                xmin = max(0, xmin - EXTEND_PIXEL)
+                ymin = max(0, ymin - EXTEND_PIXEL)
+                xmax = min(frame_width,  xmax + EXTEND_PIXEL)
+                ymax = min(frame_height, ymax + EXTEND_PIXEL)
 
-        # # Draw landmarks of each face
-        # for bbox_I, landmark_I in zip(temp_boxes, temp_resized_marks):
-        #     landmark_I = landmark_I * (1 / scale_ratio)
-        #     draw_landmark(final_frame, landmark_I, color=(125, 255, 125))
+                face_crop = orig_image[ymin:ymax, xmin:xmax]
+                aligned_face = align_face(face_crop, landmark[34], landmark[88])
 
-        #     # Show rotated raw face image
-        #     xmin, ymin, xmax, ymax = int(bbox_I[0]), int(bbox_I[1]), int(bbox_I[2]), int(bbox_I[3])
-        #     xmin -= extend_pixel
-        #     xmax += extend_pixel
-        #     ymin -= 2 * extend_pixel
-        #     ymax += extend_pixel
+                if len(queue) < MAX_QUEUE:
+                    t = threading.Thread(target=face_recognize, args=(aligned_face,))
+                    t.start()
+                    queue.append(t)
 
-        #     xmin = 0 if xmin < 0 else xmin
-        #     ymin = 0 if ymin < 0 else ymin
-        #     xmax = frame_width if xmax >= frame_width else xmax
-        #     ymax = frame_height if ymax >= frame_height else ymax
-
-        #     face_I = orig_image[ymin:ymax, xmin:xmax]
-        #     face_I = align_face(face_I, landmark_I[34], landmark_I[88])
-
-        #     cv2.imshow('Rotated raw face image', face_I)
-        #     if cv2.waitKey(1) & 0xFF == ord('q'):
-        #         break
-
-
-        if (count % request_times[api_index]) == 0:
-            for bbox_I, landmark_I in zip(temp_resized_boxes, temp_resized_marks):
-                landmark_I = landmark_I * (1 / scale_ratio)
-                xmin, ymin, xmax, ymax = int(bbox_I[0]), int(bbox_I[1]), int(bbox_I[2]), int(bbox_I[3])
-
-                xmin -= int(extend_pixel * scale_ratio)
-                xmax += int(extend_pixel * scale_ratio)
-                ymin -= int(extend_pixel * scale_ratio)
-                ymax += int(extend_pixel * scale_ratio)
-
-                xmin = 0 if xmin < 0 else xmin
-                ymin = 0 if ymin < 0 else ymin
-                # xmax = frame_width if xmax >= frame_width else xmax
-                # ymax = frame_height if ymax >= frame_height else ymax
-                xmax = new_width if xmax >= new_width else xmax
-                ymax = new_height if ymax >= new_height else ymax
-
-                resized_face_I = resized_image[ymin:ymax, xmin:xmax]
-                rotated_resized_face_I = align_face(resized_face_I, landmark_I[34], landmark_I[88])
-
-                # Show rotated resized face image
-                # cv2.imshow('Rotated resized face image', rotated_resized_face_I)
-                # if cv2.waitKey(1) & 0xFF == ord('q'):
-                #     break
-
-                count = 0
-                queue = [t for t in queue if t.is_alive()]
-                if len(queue) < 3:
-                    # cv2.imwrite('rotated_faces/' + str(time.time()) + '.jpg', rotated_resized_face_I)
-                    queue.append(threading.Thread(target=face_recognize, args=(rotated_resized_face_I,)))
-                    queue[-1].start()
-
-                # # Re-detect face in each rotated resized image
-                # temp_rotated_resized_boxes, _ = fd_0.inference(resized_face_I)
-                # if (len(temp_rotated_resized_boxes)) > 0:
-                #     xmin, ymin, xmax, ymax = int(temp_rotated_resized_boxes[0][0]), int(temp_rotated_resized_boxes[0][1]), int(temp_rotated_resized_boxes[0][2]), int(temp_rotated_resized_boxes[0][3])
-
-                #     cv2.imwrite('rotated_faces/' + str(time.time()) + '.jpg', resized_face_I[ymin:ymax, xmin:xmax])
-                #     count = 0
-                #     queue = [t for t in queue if t.is_alive()]
-                #     if len(queue) < 3:
-                #         queue.append(threading.Thread(target=face_recognize, args=(resized_face_I[ymin:ymax, xmin:xmax],)))
-                #         queue[-1].start()
-                # else:
-                #     cv2.imwrite('noface_detected/' + str(time.time()) + '.jpg', resized_face_I)
-
+        # ── FPS overlay ────────────────────────────────────────────────────
         new_frame_time = time.time()
-        fps = 1 / (new_frame_time - prev_frame_time)
+        fps = int(1 / (new_frame_time - prev_frame_time)) if prev_frame_time else 0
         prev_frame_time = new_frame_time
-        fps = str(int(fps))
+        cv2.putText(final_frame, f'{fps} fps', (20, 50),
+                    cv2.FONT_HERSHEY_DUPLEX, 1, (100, 255, 0), 1, cv2.LINE_AA)
 
-        cv2.putText(final_frame, '{0} fps'.format(fps), (20, 50), cv2.FONT_HERSHEY_DUPLEX, 1, (100, 255, 0), 1, cv2.LINE_AA)
-
-        # Convert the frame to a jpeg image
-        ret, jpeg = cv2.imencode('.jpg', final_frame)
-
-        # Return the image as bytes
+        # ── Encode and yield MJPEG frame ───────────────────────────────────
+        _, jpeg = cv2.imencode('.jpg', final_frame)
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n\r\n')
 
-def get_frame_1():
-    # Open the webcam stream
-    webcam_1 = cv2.VideoCapture(1)
-    # if not webcam_1.isOpened():
-    #     return True
-    frame_width = int(webcam_1.get(3))
-    frame_height = int(webcam_1.get(4))
-
-    prev_frame_time = 0
-    new_frame_time = 0
-    queue = []
-    count = 0
-
-    while True:
-        count += 1
-        # Read a frame from the stream
-        ret, orig_image = webcam_1.read()
-        orig_image = cv2.flip(orig_image, 0)
-
-        final_frame = orig_image.copy()
-        scale_ratio = 1/1
-        new_height, new_width = int(frame_height * scale_ratio), int(frame_width * scale_ratio)
-
-        resized_image = cv2.resize(orig_image, (new_width, new_height), interpolation = cv2.INTER_CUBIC)
-
-        temp_resized_boxes, _ = fd_1.inference(resized_image)
-
-        
-        temp_boxes = temp_resized_boxes * (1 / scale_ratio)
-
-        # Draw boundary boxes around faces
-        draw_box(final_frame, temp_boxes, color=(125, 255, 125))
-
-        # Find landmarks of each face
-        temp_resized_marks = fa.get_landmarks(resized_image, temp_resized_boxes)
-
-        # # Draw landmarks of each face
-        # for bbox_I, landmark_I in zip(temp_boxes, temp_resized_marks):
-        #     landmark_I = landmark_I * (1 / scale_ratio)
-        #     draw_landmark(final_frame, landmark_I, color=(125, 255, 125))
-
-        #     # Show rotated raw face image
-        #     xmin, ymin, xmax, ymax = int(bbox_I[0]), int(bbox_I[1]), int(bbox_I[2]), int(bbox_I[3])
-        #     xmin -= extend_pixel
-        #     xmax += extend_pixel
-        #     ymin -= 2 * extend_pixel
-        #     ymax += extend_pixel
-
-        #     xmin = 0 if xmin < 0 else xmin
-        #     ymin = 0 if ymin < 0 else ymin
-        #     xmax = frame_width if xmax >= frame_width else xmax
-        #     ymax = frame_height if ymax >= frame_height else ymax
-
-        #     face_I = orig_image[ymin:ymax, xmin:xmax]
-        #     face_I = align_face(face_I, landmark_I[34], landmark_I[88])
-
-        #     cv2.imshow('Rotated raw face image', face_I)
-        #     if cv2.waitKey(1) & 0xFF == ord('q'):
-        #         break
+    cap.release()
 
 
-        if (count % request_times[api_index]) == 0:
-            for bbox_I, landmark_I in zip(temp_resized_boxes, temp_resized_marks):
-                landmark_I = landmark_I * (1 / scale_ratio)
-                xmin, ymin, xmax, ymax = int(bbox_I[0]), int(bbox_I[1]), int(bbox_I[2]), int(bbox_I[3])
+# ── Stream registry ────────────────────────────────────────────────────────────
+# Build the list of all active streams: available webcams + configured RTSP URLs
 
-                xmin -= int(extend_pixel * scale_ratio)
-                xmax += int(extend_pixel * scale_ratio)
-                ymin -= int(extend_pixel * scale_ratio)
-                ymax += int(extend_pixel * scale_ratio)
+def build_stream_sources():
+    sources = detect_webcams()
+    sources += RTSP_URLS
+    return sources
 
-                xmin = 0 if xmin < 0 else xmin
-                ymin = 0 if ymin < 0 else ymin
-                # xmax = frame_width if xmax >= frame_width else xmax
-                # ymax = frame_height if ymax >= frame_height else ymax
-                xmax = new_width if xmax >= new_width else xmax
-                ymax = new_height if ymax >= new_height else ymax
+STREAM_SOURCES = build_stream_sources()
+print(f'Active streams: {STREAM_SOURCES}')
 
-                resized_face_I = resized_image[ymin:ymax, xmin:xmax]
-                rotated_resized_face_I = align_face(resized_face_I, landmark_I[34], landmark_I[88])
 
-                # Show rotated resized face image
-                # cv2.imshow('Rotated resized face image', rotated_resized_face_I)
-                # if cv2.waitKey(1) & 0xFF == ord('q'):
-                #     break
-
-                count = 0
-                queue = [t for t in queue if t.is_alive()]
-                if len(queue) < 3:
-                    # cv2.imwrite('rotated_faces/' + str(time.time()) + '.jpg', rotated_resized_face_I)
-                    queue.append(threading.Thread(target=face_recognize, args=(rotated_resized_face_I,)))
-                    queue[-1].start()
-
-                # # Re-detect face in each rotated resized image
-                # temp_rotated_resized_boxes, _ = fd_1.inference(resized_face_I)
-                # if (len(temp_rotated_resized_boxes)) > 0:
-                #     xmin, ymin, xmax, ymax = int(temp_rotated_resized_boxes[0][0]), int(temp_rotated_resized_boxes[0][1]), int(temp_rotated_resized_boxes[0][2]), int(temp_rotated_resized_boxes[0][3])
-
-                #     cv2.imwrite('rotated_faces/' + str(time.time()) + '.jpg', resized_face_I[ymin:ymax, xmin:xmax])
-                #     count = 0
-                #     queue = [t for t in queue if t.is_alive()]
-                #     if len(queue) < 3:
-                #         queue.append(threading.Thread(target=face_recognize, args=(resized_face_I[ymin:ymax, xmin:xmax],)))
-                #         queue[-1].start()
-                # else:
-                #     cv2.imwrite('noface_detected/' + str(time.time()) + '.jpg', resized_face_I)
-
-        new_frame_time = time.time()
-        fps = 1 / (new_frame_time - prev_frame_time)
-        prev_frame_time = new_frame_time
-        fps = str(int(fps))
-
-        cv2.putText(final_frame, '{0} fps'.format(fps), (20, 50), cv2.FONT_HERSHEY_DUPLEX, 1, (100, 255, 0), 1, cv2.LINE_AA)
-
-        # Convert the frame to a jpeg image
-        ret, jpeg = cv2.imencode('.jpg', final_frame)
-
-        # Return the image as bytes
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n\r\n')
+# ── Flask routes ───────────────────────────────────────────────────────────────
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template('index.html', stream_count=len(STREAM_SOURCES))
 
-@app.route('/video_feed_0')
-def video_feed_0():
-    return Response(get_frame_0(), mimetype = 'multipart/x-mixed-replace; boundary=frame')
 
-@app.route('/video_feed_1')
-def video_feed_1():
-    return Response(get_frame_1(), mimetype = 'multipart/x-mixed-replace; boundary=frame')
+@app.route('/video_feed/<int:stream_id>')
+def video_feed(stream_id):
+    """Stream MJPEG video for the given stream index."""
+    if stream_id >= len(STREAM_SOURCES):
+        return 'Stream not found', 404
+    return Response(
+        stream_frames(STREAM_SOURCES[stream_id]),
+        mimetype='multipart/x-mixed-replace; boundary=frame'
+    )
 
-def get_data():
-    while True:
-        # Return the image as bytes
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n\r\n')
 
 @app.route('/data')
 def data():
-    global predict_labels
-    if len(predict_labels) > 3:
-        predict_labels = predict_labels[-3:]
-    newest_data = list(reversed(predict_labels))
-    return jsonify({'info': newest_data})
+    """Return the latest recognition results (last 3 entries)."""
+    with predict_labels_lock:
+        newest = list(reversed(predict_labels[-3:]))
+    return jsonify({'info': newest})
+
 
 if __name__ == '__main__':
     app.run(debug=True)
