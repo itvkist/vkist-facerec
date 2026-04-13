@@ -1,6 +1,13 @@
 # vkist-facerec
 VKIST Face Recognition System
 
+## Clone the repository
+
+```bash
+git clone https://github.com/itvkist/vkist-facerec.git
+cd vkist-facerec
+```
+
 ## Download weights
 
 Download from Google Drive (faster) or GitHub Releases:
