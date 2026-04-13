@@ -37,8 +37,8 @@ MAX_QUEUE = 3
 
 # RTSP stream URLs — add as many as needed, leave empty to use webcams only
 RTSP_URLS = [
-    # 'rtsp://admin:password@192.168.1.10:554/Streaming/channels/102',
-    # 'rtsp://admin:password@192.168.1.11:554/Streaming/channels/102',
+    # 'rtsp://admin:@Vkist308@10.3.8.118/media/video1',
+    # 'rtsp://admin:@Vkist308@10.3.8.126/media/video1',
 ]
 
 # ── Model initialization ───────────────────────────────────────────────────────
