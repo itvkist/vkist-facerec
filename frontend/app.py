@@ -24,7 +24,7 @@ app = Flask(__name__)
 BACKEND_URL = 'http://localhost:5002/'
 
 # Account secret key from the backend (id: abc / password: 123)
-SECRET_KEY = "5f24fd82-9f64-47a5-a0cf-55765bdafcd9"
+SECRET_KEY = "281f8065-1719-4670-8f39-ef7686c03902"
 
 # Send a recognition request every N frames
 REQUEST_INTERVAL = 15
@@ -88,9 +88,10 @@ def face_recognize(frame):
         )
         result = response.json()['result']
 
-        for person_id, name, profile_id, timestamp in zip(
+        for person_id, name, description, profile_id, timestamp in zip(
             result['id'],
             result['identities'],
+            result['descriptions'],
             result['profilefaceIDs'],
             result['timelines']
         ):
@@ -101,7 +102,7 @@ def face_recognize(frame):
             profile_face = fetch_profile_image(profile_id)
 
             with predict_labels_lock:
-                predict_labels.append([person_id, name, face_thumb, profile_face, timestamp])
+                predict_labels.append([person_id, name, face_thumb, profile_face, timestamp, description])
 
     except requests.exceptions.RequestException as e:
         print(f'Recognition request failed: {e}')

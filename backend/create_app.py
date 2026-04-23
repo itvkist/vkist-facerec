@@ -82,6 +82,7 @@ class People(Base):
     gender = Column(String(64))
     type_role = Column(String(64))
     phone = Column(String(64))
+    description = Column(Text)
     access_key = Column(String(64), unique=True)
 
     def __repr__(self):

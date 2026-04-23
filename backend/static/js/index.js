@@ -397,7 +397,8 @@ var people_modal = Vue.component('people-modal', {
                 class: "",
                 classname: "",
                 parent: "",
-                phone: ""
+                phone: "",
+                description: ""
             }
         }
     },
@@ -418,6 +419,7 @@ var people_modal = Vue.component('people-modal', {
                 this.input.class = res.class_access_key
                 this.input.classname = res.class_name
                 this.input.phone = res.phone
+                this.input.description = res.description
             })
         } else {
             this.imagePreview = ''
@@ -428,6 +430,7 @@ var people_modal = Vue.component('people-modal', {
             this.input.class = ''
             this.input.classname = ''
             this.input.phone = ''
+            this.input.description = ''
         }
     },
     methods: {
@@ -450,7 +453,8 @@ var people_modal = Vue.component('people-modal', {
                 'gender': this.input.gender,
                 'type_role': this.input.type_role,
                 'class_access_key': this.input.class,
-                'phone': this.input.phone
+                'phone': this.input.phone,
+                'description': this.input.description
             }
             if (this.access_key != "") {
                 body['access_key'] = this.access_key
@@ -632,16 +636,29 @@ var people_modal = Vue.component('people-modal', {
                             <div class="input-group mb-3" id="phone">
                                 <div class="input-group-prepend">
                                     <span class="input-group-text">
-                                        Số điện thoại: 
+                                        Số điện thoại:
                                     </span>
                                 </div>
-                                <input type="text" 
-                                       class="form-control" 
-                                       placeholder="Nhập số điện thoại" 
-                                       aria-label="Phone" 
-                                       aria-describedby="basic-addon1" 
+                                <input type="text"
+                                       class="form-control"
+                                       placeholder="Nhập số điện thoại"
+                                       aria-label="Phone"
+                                       aria-describedby="basic-addon1"
                                        v-model="input.phone">
                             </div>
+                        </div>
+
+                        <div class="input-group mb-3">
+                            <div class="input-group-prepend">
+                                <span class="input-group-text">
+                                    Mô tả:
+                                </span>
+                            </div>
+                            <textarea class="form-control"
+                                      placeholder="Nhập mô tả"
+                                      aria-label="Description"
+                                      rows="3"
+                                      v-model="input.description"></textarea>
                         </div>
                        </div>
                     </div>

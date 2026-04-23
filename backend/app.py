@@ -445,6 +445,7 @@ async def facerec(request):
     profile_face_ids = []
     person_access_keys = []
     identities = []
+    descriptions = []
     timelines = []
 
     for feat, image, mask, yaw in zip(feats, images, masks, yaws):
@@ -466,8 +467,10 @@ async def facerec(request):
 
         person = People.query.filter_by(access_key=person_access_key).first()
         name = person.name if person else 'Người lạ'
+        description = person.description if person else None
         print(f'Detected: {name}')
         identities.append(name)
+        descriptions.append(description)
         person_access_keys.append(person_access_key)
 
         profile_image_id = DefineImages.query.filter_by(person_access_key=person_access_key).first()
@@ -497,6 +500,7 @@ async def facerec(request):
     return web.json_response({'result': {
         "bboxes": bboxes,
         "identities": identities,
+        "descriptions": descriptions,
         "id": person_access_keys,
         "timelines": timelines,
         "profilefaceIDs": profile_face_ids,
@@ -549,10 +553,10 @@ async def facereg(request):
             return web.json_response({"result": {'message': 'Vui lòng tryền đầy đủ dữ liệu'}}, status=400)
         access_key = str(uuid.uuid4())
         req = validate_request(req,
-            ['name', 'age', 'type_role', 'class_access_key', 'gender', 'phone', 'secret_key'],
-            {'name': None, 'age': None, 'type_role': None, 'class_access_key': None, 'gender': None, 'phone': None, 'secret_key': None})
+            ['name', 'age', 'type_role', 'class_access_key', 'gender', 'phone', 'description', 'secret_key'],
+            {'name': None, 'age': None, 'type_role': None, 'class_access_key': None, 'gender': None, 'phone': None, 'description': None, 'secret_key': None})
         person = People(user_id=user.id, name=req['name'], age=req['age'], type_role=req['type_role'],
-                        gender=req['gender'], phone=req['phone'], access_key=access_key)
+                        gender=req['gender'], phone=req['phone'], description=req['description'], access_key=access_key)
         db_session.add(person)
         db_session.commit()
         if not PeopleClasses.query.filter_by(person_access_key=person.access_key).first():
@@ -563,13 +567,14 @@ async def facereg(request):
         access_key = req['access_key']
         person = People.query.filter_by(access_key=access_key, user_id=user.id).first()
         req = validate_request(req,
-            ['name', 'age', 'type_role', 'class_access_key', 'gender', 'phone', 'secret_key'],
+            ['name', 'age', 'type_role', 'class_access_key', 'gender', 'phone', 'description', 'secret_key'],
             person.__dict__)
         person.name = req['name']
         person.age = req['age']
         person.type_role = req['type_role']
         person.gender = req['gender']
         person.phone = req['phone']
+        person.description = req['description']
         db_session.commit()
         pc = PeopleClasses.query.filter_by(person_access_key=person.access_key).first()
         if not pc:
@@ -928,7 +933,7 @@ async def people_list(current_user, request):
 
     all_people_count = db_session.query(
         DefineImages.person_access_key, DefineImages.image_id,
-        People.name, People.access_key, People.type_role, People.age, People.gender, People.phone
+        People.name, People.access_key, People.type_role, People.age, People.gender, People.phone, People.description
     ).filter(
         People.user_id == current_user['id'],
         People.access_key == DefineImages.person_access_key,
@@ -972,7 +977,7 @@ async def people_list(current_user, request):
             'name': u[2], 'image_ids': u[1], 'begin': '--', 'end': '--',
             'checkin': False, 'access_key': u[3], 'type_role': u[4],
             'class_name': None, 'class_access_key': None,
-            'age': u[5], 'gender': u[6], 'phone': u[7]
+            'age': u[5], 'gender': u[6], 'phone': u[7], 'description': u[8]
         }
     for u in (current_checkin or []):
         if str(u[0]) in people_array:
