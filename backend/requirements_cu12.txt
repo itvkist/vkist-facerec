@@ -1,0 +1,24 @@
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+torch==2.1.0+cu121
+torchvision==0.16.0+cu121
+
+aiohttp==3.13.5
+aiohttp_jinja2==1.6
+aiohttp-swagger==1.0.16
+face-alignment==1.4.1
+hnswlib==0.8.0
+Jinja2==3.1.6
+kornia==0.7.3
+ninja==1.13.0
+numpy==1.24.4
+opencv-python==4.6.0.66
+Pillow==12.2.0
+Pypubsub==4.0.7
+requests==2.33.1
+setuptools==68.0.0
+SQLAlchemy==2.0.49
+trimesh==4.11.5
+urllib3==2.6.3
+uuid==1.30
+wheel==0.46.3
