@@ -1,0 +1,9 @@
+test accuracy 213/215 = 99.07
+mask accuracy 124/194 = 63.92
+nghieng accuracy 582/652 = 89.26
+nghieng_mask accuracy 163/392 = 41.58
+
+test accuracy 198/215 = 92.09
+mask accuracy 11/186 = 5.91
+nghieng accuracy 515/652 = 78.99
+nghieng_mask accuracy 19/387 = 4.91
